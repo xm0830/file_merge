@@ -11,4 +11,6 @@ set hive.merge.mapredfiles=true;
 set hive.merge.size.per.task=256000000;
 set hive.merge.smallfiles.avgsize=256000000;
 
+set mapreduce.job.queuename=${queue_name};
+
 insert overwrite table ${hivevar:full_table_name} partition (${hivevar:partition_cols}) select ${hivevar:cols} from ${hivevar:tmp_db_name}.${hivevar:table_name} where dt='${hivevar:dt}'

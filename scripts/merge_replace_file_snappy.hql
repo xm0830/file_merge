@@ -16,4 +16,6 @@ set mapred.output.compress=true;
 set mapred.output.compression.codec=org.apache.hadoop.io.compress.SnappyCodec;  
 set io.compression.codecs=org.apache.hadoop.io.compress.SnappyCodec;
 
+set mapreduce.job.queuename=${queue_name};
+
 insert overwrite table ${hivevar:full_table_name} partition (${hivevar:partition_cols}) select ${hivevar:cols} from ${hivevar:tmp_db_name}.${hivevar:table_name} where dt='${hivevar:dt}'

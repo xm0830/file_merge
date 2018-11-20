@@ -1,6 +1,8 @@
 set hive.exec.parallel=true;
 set hive.exec.parallel.thread.number=2;
 
+set mapreduce.job.queuename=${queue_name};
+
 select
   count(1)
 from

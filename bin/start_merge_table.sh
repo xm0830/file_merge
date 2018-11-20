@@ -21,6 +21,7 @@ end_dt=$5
 mails=$6
 
 dir=$(cd ../$(dirname $0);pwd)
+queue_name=""
 export HADOOP_CLIENT_OPTS="$HADOOP_CLIENT_OPTS -Xmx2048m"
 
 function send_message()
@@ -200,38 +201,38 @@ do
     fi
 
     # 开始合并数据到临时表
-    hive -hivevar tmp_db_name=${tmp_db_name} -hivevar table_name=${table_name} -hivevar partition_cols=${partition_cols} -hivevar cols=${cols} -hivevar full_table_name=${full_table_name} -hivevar dt=${current_dt}  -f $dir/scripts/merge_src_file.hql 1>&2
+    hive -hivevar queue_name=${queue_name} -hivevar tmp_db_name=${tmp_db_name} -hivevar table_name=${table_name} -hivevar partition_cols=${partition_cols} -hivevar cols=${cols} -hivevar full_table_name=${full_table_name} -hivevar dt=${current_dt}  -f $dir/scripts/merge_src_file.hql 1>&2
     if [[ $? -ne 0 ]];then
       print_to_stdout "调用hive合并表: ${full_table_name} 在${current_dt}的数据失败！" "error"
       exit 1
     fi
    
     # 开始校验合并后的数据
-    validate_data=$(hive -hivevar tmp_db_name=${tmp_db_name} -hivevar table_name=${table_name} -hivevar cols=${cols} -hivevar full_table_name=${full_table_name} -hivevar dt=${current_dt} -f $dir/scripts/merge_validate_file.hql)
+    validate_data=$(hive -hivevar queue_name=${queue_name} -hivevar tmp_db_name=${tmp_db_name} -hivevar table_name=${table_name} -hivevar cols=${cols} -hivevar full_table_name=${full_table_name} -hivevar dt=${current_dt} -f $dir/scripts/merge_validate_file.hql)
     if [[ $? -ne 0 ]];then
       print_to_stdout "调用hive校验表: ${full_table_name} 在${current_dt}的合并后的数据是否正确失败！" "error"
       exit 1
     fi
     if [[ ${validate_data} > 0 ]];then
-      print_to_stdout "表: ${full_table_name} 在${current_dt}的合并后的数据与原始数据不一致，忽略替换操作！" "error"
+      print_to_stdout "表: ${full_table_name} 在${current_dt}的合并后的数据与原始数据不一致，忽略替换操作，退出合并任务！" "error"
       exit 1
     fi
 
     # 开始替换原始表的数据
-    hive -hivevar tmp_db_name=${tmp_db_name} -hivevar table_name=${table_name} -hivevar partition_cols=${partition_cols} -hivevar cols=${cols} -hivevar full_table_name=${full_table_name} -hivevar dt=${current_dt} -f ${replace_script} 1>&2
+    hive -hivevar queue_name=${queue_name} -hivevar tmp_db_name=${tmp_db_name} -hivevar table_name=${table_name} -hivevar partition_cols=${partition_cols} -hivevar cols=${cols} -hivevar full_table_name=${full_table_name} -hivevar dt=${current_dt} -f ${replace_script} 1>&2
     if [[ $? -ne 0 ]];then
       print_to_stdout "调用hive替换表: ${full_table_name} 在${current_dt}的合并后的数据失败！" "error"
       exit 1
     fi
 
     # 开始校验替换后的数据
-    validate_data=$(hive -hivevar tmp_db_name=${tmp_db_name} -hivevar table_name=${table_name} -hivevar cols=${cols} -hivevar full_table_name=${full_table_name} -hivevar dt=${current_dt} -f $dir/scripts/merge_validate_file.hql)
+    validate_data=$(hive -hivevar queue_name=${queue_name} -hivevar tmp_db_name=${tmp_db_name} -hivevar table_name=${table_name} -hivevar cols=${cols} -hivevar full_table_name=${full_table_name} -hivevar dt=${current_dt} -f $dir/scripts/merge_validate_file.hql)
     if [[ $? -ne 0 ]];then
       print_to_stdout "调用hive校验表: ${full_table_name} 在${current_dt}的替换后的数据是否正确失败！" "error"
       exit 1
     fi
     if [[ ${validate_data} > 0 ]];then
-      print_to_stdout "表: ${full_table_name} 在${current_dt}的合并后的数据与原始数据不一致，忽略替换操作！" "error"
+      print_to_stdout "表: ${full_table_name} 在${current_dt}的合并后的数据与原始数据不一致，忽略替换操作，退出合并任务！" "error"
       exit 1
     fi
 
