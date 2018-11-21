@@ -8,7 +8,7 @@ if [[ $# -ne 6 ]];then
   \t参数3: 必填,临时输出库名
   \t参数4: 必填,起始时间dt(格式:yyyy-mm-dd或者yyyymmdd,取决于表中dt字段的格式)
   \t参数5: 必填,结束时间dt(格式:yyyy-mm-dd,取决于表中dt字段的格式,不包含该时间)
-  \t参数6: 必填,通知人(用户邮箱,多个之间用逗号分隔),不通知填写空字符串 \n
+  \t参数6: 必填,通知人(用户手机号,多个之间用逗号分隔),不通知填写空字符串 \n
   注意：脚本日志会重定向到标准输出中，HIVE任务相关的日志会重定向到标准错误中"
   exit 1
 fi
@@ -18,30 +18,25 @@ codec=$2
 tmp_db_name=$3
 start_dt=$4
 end_dt=$5
-mails=$6
+users=$6
 
 dir=$(cd ../$(dirname $0);pwd)
 # queue_name="root.q_ad.q_adlog_merge"
-queue_name="root.q_dtb.q_dw.q_dw_etl"
+# queue_name="root.q_dtb.q_dw.q_dw_etl"
+queue_name="root.q_tongyong"
 export HADOOP_CLIENT_OPTS="$HADOOP_CLIENT_OPTS -Xmx2048m"
 
 function send_message()
 {
-  local msgURL='http://adp.data.autohome.com.cn/notice/msgApi/sendMsgApi.json'
-  local mails=$1
-  local title="$2"
-  local mtitle=`echo "$title"`
-  local msg="$3"
-  local mmsg=`echo "$msg"|sed 's/"/\\\"/g;s/$/<br>/g;s/\t/ /g'|tr -d '\n'`
-
-  users=`echo "$mails"|sed 's/^/{"mail":"/g;s/,/"},{"mail":"/g;s/$/"}/g'`
-
-  data='{"type":"mail","title":"'$mtitle'","user":['$users'],"content":"'$mmsg'"}'
-
-  echo "$data" > /tmp/jsonmail.html.$$
-
-  curl -i -X POST -H "Accept:application/json" -H "Content-type:application/json;charset=UTF-8" --data-binary @/tmp/jsonmail.html.$$ $msgURL > /dev/null 2>&1
-  rm -f /tmp/jsonmail.html.$$
+  local msgURL='http://smsapi.in.autohome.com.cn/api/sms/send'
+  local phoneNum=$1
+  local msg="$2"
+  local msg1="`date \"+%F %T\"`%0a${msg}"
+  local msg2=${msg1:0:200}
+  [[ "$msg2" != "$msg1" ]] && msg2=$msg2"...(未完)"
+  local msg3=`echo "$msg2"|sed 's/ /%20/g;s/$/%0a/g'`
+  local form="_appid=pv&mobile=${phoneNum}&message=${msg3}"
+  curl -i -X GET "${msgURL}?${form}" >/dev/null
 }
 
 function print_to_stdout()
@@ -52,9 +47,9 @@ function print_to_stdout()
   else
     if [[ "$2" = "error" ]];then
       echo -e "[ERROR][${time}] $1" >&1
-      if [[ "$mails" != "" ]];then
-        echo -e "[INFO][${time}] 开始发送邮件通知用户: ${mails}" >&1
-        send_message "$mails" "【小文件合并任务提醒】" "$1"
+      if [[ "$users" != "" ]];then
+        echo -e "[INFO][${time}] 开始发送短信通知用户: ${users}" >&1
+        send_message "$users" "【小文件合并任务提醒】$1"
       fi
     else
       echo -e "[INFO][${time}] $1" >&1
@@ -153,6 +148,65 @@ function get_replace_script()
   echo "$replace_script"
 }
 
+function get_validate_cols()
+{
+  local cols=$1
+  local new_cols=""
+  array=(${cols//,/ })
+  for col in ${array[@]}
+  do
+    new_cols="$new_cols,case when $col is null then '' else $col end as $col"
+  done 
+  echo ${new_cols#*,}
+}
+
+function build_validate_sql()
+{
+  local queue_name=$1
+  local tmp_db_name=$2
+  local table_name=$3
+  local validate_cols=$4
+  local cols=$5
+  local full_table_name=$6
+  local dt=$7
+  echo -e "set hive.exec.parallel=true;set hive.exec.parallel.thread.number=2;set mapreduce.job.queuename=${queue_name};select
+  count(1)
+from
+  (
+    select
+      md5(concat(${cols})) as md5_value,
+      count(1) as md5_count
+    from
+      (
+        select
+          ${validate_cols}
+        from
+          ${full_table_name}
+        where
+          dt = '${dt}'
+      ) as a
+    group by
+      md5(concat(${cols}))
+  ) as c full outer join (
+    select
+      md5(concat(${cols})) as md5_value,
+      count(1) as md5_count
+    from
+      (
+        select
+          ${validate_cols}
+        from
+          ${tmp_db_name}.${table_name}
+        where
+          dt = '${dt}'
+      ) as b
+    group by
+      md5(concat(${cols}))
+  ) as d on c.md5_value = d.md5_value
+where
+  c.md5_count != d.md5_count or c.md5_count is null or d.md5_count is null;"
+}
+
 # 校验输入的表名参数是否符合规则
 validate_table_name $full_table_name
 
@@ -195,7 +249,7 @@ do
  
     # 创建相同表结构的临时表
     table_name="merge_"${full_table_name##*.}
-    hive -e "create table if not exists ${tmp_db_name}.${table_name} like ${full_table_name}" 2> /dev/null
+    hive -e "create table if not exists ${tmp_db_name}.${table_name} like ${full_table_name}" >&2
     if [[ $? -ne 0 ]];then
       print_to_stdout "调用hive创建临时表: ${tmp_db_name}.${table_name} 失败！" "error"
       exit 1
@@ -209,7 +263,9 @@ do
     fi
    
     # 开始校验合并后的数据
-    validate_data=$(hive -hivevar queue_name=${queue_name} -hivevar tmp_db_name=${tmp_db_name} -hivevar table_name=${table_name} -hivevar cols=${cols} -hivevar full_table_name=${full_table_name} -hivevar dt=${current_dt} -f $dir/scripts/merge_validate_file.hql)
+    validate_cols="$(get_validate_cols ${cols})"
+    validate_sql=$(build_validate_sql "${queue_name}" "${tmp_db_name}" "${table_name}" "${validate_cols}" "${cols}" "${full_table_name}" "${current_dt}")
+    validate_data=$(hive -e "${validate_sql}")
     if [[ $? -ne 0 ]];then
       print_to_stdout "调用hive校验表: ${full_table_name} 在${current_dt}的合并后的数据是否正确失败！" "error"
       exit 1
@@ -227,7 +283,7 @@ do
     fi
 
     # 开始校验替换后的数据
-    validate_data=$(hive -hivevar queue_name=${queue_name} -hivevar tmp_db_name=${tmp_db_name} -hivevar table_name=${table_name} -hivevar cols=${cols} -hivevar full_table_name=${full_table_name} -hivevar dt=${current_dt} -f $dir/scripts/merge_validate_file.hql)
+    validate_data=$(hive -e "${validate_sql}")
     if [[ $? -ne 0 ]];then
       print_to_stdout "调用hive校验表: ${full_table_name} 在${current_dt}的替换后的数据是否正确失败！" "error"
       exit 1
@@ -250,6 +306,6 @@ do
   fi
 done
 
-if [[ "$mails" != "" ]];then
-  send_message "$mails" "【小文件合并任务提醒】" "您的合并任务已经完成,表: ${full_table_name},起始时间:${start_dt},结束时间:${end_dt}(不包含),请确认成功后务必手动删除${tmp_db_name}库中对应的临时表!"
+if [[ "$users" != "" ]];then
+  send_message "$users" "【小文件合并任务提醒】您的合并任务已经完成,表: ${full_table_name},起始时间:${start_dt},结束时间:${end_dt}(不包含),请确认成功后务必手动删除${tmp_db_name}库中对应的临时表!"
 fi
