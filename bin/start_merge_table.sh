@@ -21,7 +21,8 @@ end_dt=$5
 mails=$6
 
 dir=$(cd ../$(dirname $0);pwd)
-queue_name=""
+# queue_name="root.q_ad.q_adlog_merge"
+queue_name="root.q_dtb.q_dw.q_dw_etl"
 export HADOOP_CLIENT_OPTS="$HADOOP_CLIENT_OPTS -Xmx2048m"
 
 function send_message()
