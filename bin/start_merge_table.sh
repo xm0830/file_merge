@@ -22,9 +22,9 @@ users=$6
 
 dir=$(cd ../$(dirname $0);pwd)
 # queue_name="root.q_ad.q_adlog_merge"
-# queue_name="root.q_dtb.q_dw.q_dw_etl"
-queue_name="root.q_tongyong"
-export HADOOP_CLIENT_OPTS="$HADOOP_CLIENT_OPTS -Xmx2048m"
+queue_name="root.q_dtb.q_dw.q_dw_etl"
+# queue_name="root.q_tongyong"
+export HADOOP_CLIENT_OPTS="$HADOOP_CLIENT_OPTS -Xmx512m"
 
 function send_message()
 {
@@ -36,7 +36,7 @@ function send_message()
   [[ "$msg2" != "$msg1" ]] && msg2=$msg2"...(未完)"
   local msg3=`echo "$msg2"|sed 's/ /%20/g;s/$/%0a/g'`
   local form="_appid=pv&mobile=${phoneNum}&message=${msg3}"
-  curl -i -X GET "${msgURL}?${form}" >/dev/null
+  curl -i -X GET "${msgURL}?${form}" >/dev/null 2>&1
 }
 
 function print_to_stdout()
@@ -233,77 +233,69 @@ validate_partition $partition_cols
 replace_script=$(get_replace_script $codec)
 print_to_stdout "将使用: $replace_script 进行替换"
 
-current_dt=${start_dt}
-while [[ 1 == 1 ]];
+# 获取表的日期级别的分区
+dts=($(hive -e "show partitions ${full_table_name}" 2>/dev/null | awk -F'/' '{print $1}' | sort -u | awk -F'=' -v start_dt=$start_dt -v end_dt=$end_dt '{if ($2>=start_dt && $2<end_dt) print $2}'))
+
+for current_dt in ${dts[@]}
 do
-  if ([[ "$current_dt" == "$start_dt" ]] && [[ "$current_dt" < "$end_dt" ]]) || ([[ "$current_dt" > "$start_dt" ]] && [[ "$current_dt" < "$end_dt" ]]);then
-    print_to_stdout "开始处理日期dt为：${current_dt} 的数据"
-    print_to_stderr "开始处理日期dt为：${current_dt} 的数据"
-   
-    # 检查时间段是否在23:00-09:00之间
-    current_hour=$(date +%T | awk -F':' '{print $1}')
-    if [[ "$current_hour" > "23" ]] || [[ "$current_hour" < "09" ]];then
-       print_to_stdout "为避免影响晚上重要任务的运行，程序将在23:00-09:00之间进入休眠状态"
-       sleep 11h
-    fi
- 
-    # 创建相同表结构的临时表
-    table_name="merge_"${full_table_name##*.}
-    hive -e "create table if not exists ${tmp_db_name}.${table_name} like ${full_table_name}" >&2
-    if [[ $? -ne 0 ]];then
-      print_to_stdout "调用hive创建临时表: ${tmp_db_name}.${table_name} 失败！" "error"
-      exit 1
-    fi
-
-    # 开始合并数据到临时表
-    hive -hivevar queue_name=${queue_name} -hivevar tmp_db_name=${tmp_db_name} -hivevar table_name=${table_name} -hivevar partition_cols=${partition_cols} -hivevar cols=${cols} -hivevar full_table_name=${full_table_name} -hivevar dt=${current_dt}  -f $dir/scripts/merge_src_file.hql 1>&2
-    if [[ $? -ne 0 ]];then
-      print_to_stdout "调用hive合并表: ${full_table_name} 在${current_dt}的数据失败！" "error"
-      exit 1
-    fi
-   
-    # 开始校验合并后的数据
-    validate_cols="$(get_validate_cols ${cols})"
-    validate_sql=$(build_validate_sql "${queue_name}" "${tmp_db_name}" "${table_name}" "${validate_cols}" "${cols}" "${full_table_name}" "${current_dt}")
-    validate_data=$(hive -e "${validate_sql}")
-    if [[ $? -ne 0 ]];then
-      print_to_stdout "调用hive校验表: ${full_table_name} 在${current_dt}的合并后的数据是否正确失败！" "error"
-      exit 1
-    fi
-    if [[ ${validate_data} > 0 ]];then
-      print_to_stdout "表: ${full_table_name} 在${current_dt}的合并后的数据与原始数据不一致，忽略替换操作，退出合并任务！" "error"
-      exit 1
-    fi
-
-    # 开始替换原始表的数据
-    hive -hivevar queue_name=${queue_name} -hivevar tmp_db_name=${tmp_db_name} -hivevar table_name=${table_name} -hivevar partition_cols=${partition_cols} -hivevar cols=${cols} -hivevar full_table_name=${full_table_name} -hivevar dt=${current_dt} -f ${replace_script} 1>&2
-    if [[ $? -ne 0 ]];then
-      print_to_stdout "调用hive替换表: ${full_table_name} 在${current_dt}的合并后的数据失败！" "error"
-      exit 1
-    fi
-
-    # 开始校验替换后的数据
-    validate_data=$(hive -e "${validate_sql}")
-    if [[ $? -ne 0 ]];then
-      print_to_stdout "调用hive校验表: ${full_table_name} 在${current_dt}的替换后的数据是否正确失败！" "error"
-      exit 1
-    fi
-    if [[ ${validate_data} > 0 ]];then
-      print_to_stdout "表: ${full_table_name} 在${current_dt}的合并后的数据与原始数据不一致，忽略替换操作，退出合并任务！" "error"
-      exit 1
-    fi
-
-    print_to_stdout "处理日期dt为：${current_dt} 的数据成功!"
-    print_to_stderr "处理日期dt为：${current_dt} 的数据成功!"
-
-    if [[ "$current_dt" =~ "-" ]];then
-      current_dt=$(date -d "$current_dt +1 day " +%Y-%m-%d)
-    else
-      current_dt=$(date -d "$current_dt +1 day " +%Y%m%d)
-    fi
-  else
-    break
+  print_to_stdout "开始处理日期dt为：${current_dt} 的数据"
+  print_to_stderr "开始处理日期dt为：${current_dt} 的数据"
+  
+  # 检查时间段是否在23:00-09:00之间
+  current_hour=$(date +%T | awk -F':' '{print $1}')
+  if [[ "$current_hour" > "23" ]] || [[ "$current_hour" < "09" ]];then
+      print_to_stdout "为避免影响晚上重要任务的运行，程序将在23:00-09:00之间进入休眠状态"
+      sleep 11h
   fi
+
+  # 创建相同表结构的临时表
+  table_name="merge_"${full_table_name##*.}
+  hive -e "create table if not exists ${tmp_db_name}.${table_name} like ${full_table_name}" >&2
+  if [[ $? -ne 0 ]];then
+    print_to_stdout "调用hive创建临时表: ${tmp_db_name}.${table_name} 失败！" "error"
+    exit 1
+  fi
+
+  # 开始合并数据到临时表
+  hive -hivevar queue_name=${queue_name} -hivevar tmp_db_name=${tmp_db_name} -hivevar table_name=${table_name} -hivevar partition_cols=${partition_cols} -hivevar cols=${cols} -hivevar full_table_name=${full_table_name} -hivevar dt=${current_dt}  -f $dir/scripts/merge_src_file.hql 1>&2
+  if [[ $? -ne 0 ]];then
+    print_to_stdout "调用hive合并表: ${full_table_name} 在${current_dt}的数据失败！" "error"
+    exit 1
+  fi
+  
+  # 开始校验合并后的数据
+  validate_cols="$(get_validate_cols ${cols})"
+  validate_sql=$(build_validate_sql "${queue_name}" "${tmp_db_name}" "${table_name}" "${validate_cols}" "${cols}" "${full_table_name}" "${current_dt}")
+  validate_data=$(hive -e "${validate_sql}")
+  if [[ $? -ne 0 ]];then
+    print_to_stdout "调用hive校验表: ${full_table_name} 在${current_dt}的合并后的数据是否正确失败！" "error"
+    exit 1
+  fi
+  if [[ ${validate_data} > 0 ]];then
+    print_to_stdout "表: ${full_table_name} 在${current_dt}的合并后的数据与原始数据不一致，忽略替换操作，退出合并任务！" "error"
+    exit 1
+  fi
+
+  # 开始替换原始表的数据
+  hive -hivevar queue_name=${queue_name} -hivevar tmp_db_name=${tmp_db_name} -hivevar table_name=${table_name} -hivevar partition_cols=${partition_cols} -hivevar cols=${cols} -hivevar full_table_name=${full_table_name} -hivevar dt=${current_dt} -f ${replace_script} 1>&2
+  if [[ $? -ne 0 ]];then
+    print_to_stdout "调用hive替换表: ${full_table_name} 在${current_dt}的合并后的数据失败！" "error"
+    exit 1
+  fi
+
+  # 开始校验替换后的数据
+  validate_data=$(hive -e "${validate_sql}")
+  if [[ $? -ne 0 ]];then
+    print_to_stdout "调用hive校验表: ${full_table_name} 在${current_dt}的替换后的数据是否正确失败！" "error"
+    exit 1
+  fi
+  if [[ ${validate_data} > 0 ]];then
+    print_to_stdout "表: ${full_table_name} 在${current_dt}的合并后的数据与原始数据不一致，忽略替换操作，退出合并任务！" "error"
+    exit 1
+  fi
+
+  print_to_stdout "处理日期dt为：${current_dt} 的数据成功!"
+  print_to_stderr "处理日期dt为：${current_dt} 的数据成功!"
 done
 
 if [[ "$users" != "" ]];then
