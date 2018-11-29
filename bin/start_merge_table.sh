@@ -24,7 +24,7 @@ source ./common_util.sh
 
 dir=$(cd ../$(dirname $0);pwd)
 # queue_name="root.q_ad.q_adlog_merge"
-queue_name="root.q_dtb.q_dw.q_dw_etl"
+# queue_name="root.q_dtb.q_dw.q_dw_etl"
 # queue_name="root.q_tongyong"
 export HADOOP_CLIENT_OPTS="$HADOOP_CLIENT_OPTS -Xmx512m"
 
@@ -85,13 +85,18 @@ function get_replace_script()
 function get_validate_cols()
 {
   local cols=$1
-  local new_cols=""
+  local new_cols="md5(concat("
   array=(${cols//,/ })
   for col in ${array[@]}
   do
-    new_cols="$new_cols,case when $col is null then '' else $col end as $col"
-  done 
-  echo ${new_cols#*,}
+    if [[ "$new_cols" == "md5(concat(" ]];then
+      new_cols="${new_cols}nvl($col, '')"
+    else
+      new_cols="${new_cols},nvl($col, '')"
+    fi
+  done
+  new_cols="${new_cols}))"
+  echo ${new_cols}
 }
 
 function build_validate_sql()
@@ -100,45 +105,48 @@ function build_validate_sql()
   local tmp_db_name=$2
   local table_name=$3
   local validate_cols=$4
-  local cols=$5
-  local full_table_name=$6
-  local dt=$7
-  echo -e "set hive.exec.parallel=true;set hive.exec.parallel.thread.number=2;set mapreduce.job.queuename=${queue_name};select
+  local full_table_name=$5
+  local dt=$6
+  echo -e "set hive.map.aggr=true;set hive.exec.parallel=true;set hive.exec.parallel.thread.number=2;set mapreduce.job.queuename=${queue_name};add jar viewfs://AutoLq2Cluster/user/xuming10797/bdp-udf-1.0-SNAPSHOT.jar;
+create temporary function aggr_md5 as 'com.autohome.bdp.udf.AggregationMd5';select
   count(1)
 from
   (
     select
-      md5(concat(${cols})) as md5_value,
-      count(1) as md5_count
+      hash(a.md5_value) % 50000 as hv,
+      aggr_md5(a.md5_value) as new_md5_value
     from
       (
         select
-          ${validate_cols}
+          ${validate_cols} as md5_value
         from
           ${full_table_name}
         where
           dt = '${dt}'
       ) as a
     group by
-      md5(concat(${cols}))
-  ) as c full outer join (
+      hash(a.md5_value) % 50000
+  ) as c full
+  outer join (
     select
-      md5(concat(${cols})) as md5_value,
-      count(1) as md5_count
+      hash(b.md5_value) % 50000 as hv,
+      aggr_md5(b.md5_value) as new_md5_value
     from
       (
         select
-          ${validate_cols}
+          ${validate_cols} as md5_value
         from
           ${tmp_db_name}.${table_name}
         where
           dt = '${dt}'
       ) as b
     group by
-      md5(concat(${cols}))
-  ) as d on c.md5_value = d.md5_value
+      hash(b.md5_value) % 50000
+  ) as d on c.new_md5_value = d.new_md5_value
 where
-  c.md5_count != d.md5_count or c.md5_count is null or d.md5_count is null;"
+  c.hv != d.hv
+  or c.hv is null
+  or d.hv is null;"
 }
 
 # 校验输入的表名参数是否符合规则
@@ -182,10 +190,12 @@ do
   fi
 
   # 检查时间段是否在23:00-09:00之间
-  current_hour=$(date +%T | awk -F':' '{print $1}')
-  if [[ "$current_hour" > "22" ]] || [[ "$current_hour" < "09" ]];then
-      print_to_stdout "为避免影响晚上重要任务的运行，程序将在23:00-09:00之间进入休眠状态"
-      sleep 10h
+  if [[ "$queue_name" -ne "root.q_ad.q_adlog_merge" ]];then
+    current_hour=$(date +%T | awk -F':' '{print $1}')
+    if [[ "$current_hour" > "22" ]] || [[ "$current_hour" < "09" ]];then
+        print_to_stdout "为避免影响晚上重要任务的运行，程序将在23:00-09:00之间进入休眠状态"
+        sleep 9h
+    fi
   fi
 
   # 创建相同表结构的临时表
@@ -205,7 +215,8 @@ do
   
   # 开始校验合并后的数据
   validate_cols="$(get_validate_cols ${cols})"
-  validate_sql=$(build_validate_sql "${queue_name}" "${tmp_db_name}" "${table_name}" "${validate_cols}" "${cols}" "${full_table_name}" "${current_dt}")
+  validate_sql=$(build_validate_sql "${queue_name}" "${tmp_db_name}" "${table_name}" "${validate_cols}" "${full_table_name}" "${current_dt}")
+  # print_to_stdout "$validate_sql"
   validate_data=$(hive -e "${validate_sql}")
   if [[ $? -ne 0 ]];then
     print_to_stdout "调用hive校验表: ${full_table_name} 在${current_dt}的合并后的数据是否正确失败！" "error"
