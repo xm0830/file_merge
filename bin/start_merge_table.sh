@@ -23,7 +23,7 @@ users=$6
 source ./common_util.sh
 
 dir=$(cd ../$(dirname $0);pwd)
-# queue_name="root.q_ad.q_adlog_merge"
+queue_name="root.q_ad.q_adlog_merge"
 # queue_name="root.q_dtb.q_dw.q_dw_etl"
 # queue_name="root.q_tongyong"
 export HADOOP_CLIENT_OPTS="$HADOOP_CLIENT_OPTS -Xmx512m"
@@ -107,42 +107,31 @@ function build_validate_sql()
   local validate_cols=$4
   local full_table_name=$5
   local dt=$6
-  echo -e "set hive.map.aggr=true;set hive.exec.parallel=true;set hive.exec.parallel.thread.number=2;set mapreduce.job.queuename=${queue_name};add jar viewfs://AutoLq2Cluster/user/xuming10797/bdp-udf-1.0-SNAPSHOT.jar;
-create temporary function aggr_md5 as 'com.autohome.bdp.udf.AggregationMd5';select
+  echo -e "set hive.map.aggr=true;set hive.exec.parallel=true;set hive.exec.parallel.thread.number=2;set mapreduce.job.queuename=${queue_name};select
   count(1)
 from
   (
     select
-      hash(a.md5_value) % 50000 as hv,
-      aggr_md5(a.md5_value) as new_md5_value
+      ${validate_cols} as md5_value,
+      count(1) as hv
     from
-      (
-        select
-          ${validate_cols} as md5_value
-        from
-          ${full_table_name}
-        where
-          dt = '${dt}'
-      ) as a
+      ${full_table_name}
+    where
+      dt = '${dt}'
     group by
-      hash(a.md5_value) % 50000
+      ${validate_cols}
   ) as c full
   outer join (
     select
-      hash(b.md5_value) % 50000 as hv,
-      aggr_md5(b.md5_value) as new_md5_value
+      ${validate_cols} as md5_value,
+      count(1) as hv
     from
-      (
-        select
-          ${validate_cols} as md5_value
-        from
-          ${tmp_db_name}.${table_name}
-        where
-          dt = '${dt}'
-      ) as b
+      ${tmp_db_name}.${table_name}
+    where
+      dt = '${dt}'
     group by
-      hash(b.md5_value) % 50000
-  ) as d on c.new_md5_value = d.new_md5_value
+      ${validate_cols}
+  ) as d on c.md5_value = d.md5_value
 where
   c.hv != d.hv
   or c.hv is null
@@ -179,6 +168,15 @@ print_to_stdout "将使用: $replace_script 进行替换"
 
 # 获取表的日期级别的分区
 dts=($(hive -e "show partitions ${full_table_name}" 2>/dev/null | awk -F'/' '{print $1}' | sort -u | awk -F'=' -v start_dt=$start_dt -v end_dt=$end_dt '{if ($2>=start_dt && $2<end_dt) print $2}'))
+for ((i=1; i<=3; i ++))  
+do  
+  if [[ ${#dts[@]} -eq 0 ]];then
+    sleep 5s
+    dts=($(hive -e "show partitions ${full_table_name}" 2>/dev/null | awk -F'/' '{print $1}' | sort -u | awk -F'=' -v start_dt=$start_dt -v end_dt=$end_dt '{if ($2>=start_dt && $2<end_dt) print $2}'))
+  else
+    break
+  fi
+done 
 
 for current_dt in ${dts[@]}
 do
