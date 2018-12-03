@@ -30,7 +30,7 @@ export HADOOP_CLIENT_OPTS="$HADOOP_CLIENT_OPTS -Xmx512m"
 
 function validate_partition()
 {
-  result=$(echo $1 | grep -E "dt,?.*")
+  result=$(echo $1  | grep -Ev ",dt,?.*" | grep -E "dt,?.*")
   if [[ "${result}" == "" ]];then
     print_to_stdout "分区格式: ${1} 必须包含:dt" "error"
     exit 1
@@ -107,35 +107,46 @@ function build_validate_sql()
   local validate_cols=$4
   local full_table_name=$5
   local dt=$6
-  echo -e "set hive.map.aggr=true;set hive.exec.parallel=true;set hive.exec.parallel.thread.number=2;set mapreduce.job.queuename=${queue_name};select
+  echo -e "set hive.map.aggr=true;set hive.exec.parallel=true;set hive.exec.parallel.thread.number=2;set mapreduce.job.queuename=${queue_name};add jar viewfs://AutoLq2Cluster/user/xuming10797/bdp-udf-1.0-SNAPSHOT.jar;
+create temporary function convert_as_bigint as 'com.autohome.bdp.udf.ConvertAsBigint';select
   count(1)
 from
   (
     select
-      ${validate_cols} as md5_value,
-      count(1) as hv
+      hash(a.md5_value) % 50000 as hv,
+      sum(convert_as_bigint(a.md5_value)) as md5_value
     from
-      ${full_table_name}
-    where
-      dt = '${dt}'
+      (
+        select
+          ${validate_cols} as md5_value
+        from
+          ${full_table_name}
+        where
+          dt = '${dt}'
+      ) as a
     group by
-      ${validate_cols}
+      hash(a.md5_value) % 50000
   ) as c full
   outer join (
     select
-      ${validate_cols} as md5_value,
-      count(1) as hv
+      hash(b.md5_value) % 50000 as hv,
+      sum(convert_as_bigint(b.md5_value)) as md5_value
     from
-      ${tmp_db_name}.${table_name}
-    where
-      dt = '${dt}'
-    group by
-      ${validate_cols}
-  ) as d on c.md5_value = d.md5_value
+      (
+        select
+          ${validate_cols} as md5_value
+        from
+          ${tmp_db_name}.${table_name}
+        where
+          dt = '${dt}'
+      ) as b
+      group by
+        hash(b.md5_value) % 50000
+  ) as d on c.hv = d.hv
 where
-  c.hv != d.hv
-  or c.hv is null
-  or d.hv is null;"
+  c.md5_value != d.md5_value
+  or c.md5_value is null
+  or d.md5_value is null;"
 }
 
 # 校验输入的表名参数是否符合规则
@@ -188,7 +199,7 @@ do
   fi
 
   # 检查时间段是否在23:00-09:00之间
-  if [[ "$queue_name" -ne "root.q_ad.q_adlog_merge" ]];then
+  if [[ "$queue_name" != "root.q_ad.q_adlog_merge" ]];then
     current_hour=$(date +%T | awk -F':' '{print $1}')
     if [[ "$current_hour" > "22" ]] || [[ "$current_hour" < "09" ]];then
         print_to_stdout "为避免影响晚上重要任务的运行，程序将在23:00-09:00之间进入休眠状态"
