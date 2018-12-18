@@ -23,14 +23,14 @@ users=$6
 source ./common_util.sh
 
 dir=$(cd ../$(dirname $0);pwd)
-queue_name="root.q_ad.q_adlog_merge"
-# queue_name="root.q_dtb.q_dw.q_dw_etl"
+# queue_name="root.q_ad.q_adlog_merge"
+queue_name="root.q_dtb.q_dw.q_dw_common"
 # queue_name="root.q_tongyong"
 export HADOOP_CLIENT_OPTS="$HADOOP_CLIENT_OPTS -Xmx512m"
 
 function validate_partition()
 {
-  result=$(echo $1  | grep -Ev ",dt,?.*" | grep -E "dt,?.*")
+  result=$(echo $1 | grep -E "dt,?.*")
   if [[ "${result}" == "" ]];then
     print_to_stdout "分区格式: ${1} 必须包含:dt" "error"
     exit 1
@@ -41,7 +41,7 @@ function get_cols_before_parse()
 {
   local full_table_name=$1
   all_cols=""
-  for col in $(hive -e "desc $full_table_name" 2>/dev/null | awk '{print $1}')
+  for col in $(hive -e "desc $full_table_name" 2>/dev/null | awk '{if($2 != "") print $1}')
   do
     all_cols="${all_cols},${col}"
   done
@@ -199,13 +199,13 @@ do
   fi
 
   # 检查时间段是否在23:00-09:00之间
-  if [[ "$queue_name" != "root.q_ad.q_adlog_merge" ]];then
-    current_hour=$(date +%T | awk -F':' '{print $1}')
-    if [[ "$current_hour" > "22" ]] || [[ "$current_hour" < "09" ]];then
-        print_to_stdout "为避免影响晚上重要任务的运行，程序将在23:00-09:00之间进入休眠状态"
-        sleep 9h
-    fi
-  fi
+  # if [[ "$queue_name" != "root.q_ad.q_adlog_merge" ]];then
+  #   current_hour=$(date +%T | awk -F':' '{print $1}')
+  #   if [[ "$current_hour" > "22" ]] || [[ "$current_hour" < "09" ]];then
+  #       print_to_stdout "为避免影响晚上重要任务的运行，程序将在23:00-09:00之间进入休眠状态"
+  #       sleep 9h
+  #   fi
+  # fi
 
   # 创建相同表结构的临时表
   table_name="merge_"${full_table_name##*.}
