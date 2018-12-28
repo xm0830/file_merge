@@ -90,9 +90,9 @@ function get_validate_cols()
   for col in ${array[@]}
   do
     if [[ "$new_cols" == "md5(concat(" ]];then
-      new_cols="${new_cols}nvl($col, '')"
+      new_cols="${new_cols}nvl(to_json($col), '')"
     else
-      new_cols="${new_cols},nvl($col, '')"
+      new_cols="${new_cols},nvl(to_json($col), '')"
     fi
   done
   new_cols="${new_cols}))"
@@ -107,8 +107,8 @@ function build_validate_sql()
   local validate_cols=$4
   local full_table_name=$5
   local dt=$6
-  echo -e "set hive.map.aggr=true;set hive.exec.parallel=true;set hive.exec.parallel.thread.number=2;set mapreduce.job.queuename=${queue_name};add jar viewfs://AutoLq2Cluster/user/xuming10797/bdp-udf-1.0-SNAPSHOT.jar;
-create temporary function convert_as_bigint as 'com.autohome.bdp.udf.ConvertAsBigint';select
+  echo -e "set hive.map.aggr=true;set hive.exec.parallel=true;set hive.exec.parallel.thread.number=2;set mapreduce.job.queuename=${queue_name};add jar viewfs://AutoLq2Cluster/user/xuming10797/bdp-udf-2.0-SNAPSHOT.jar;
+create temporary function convert_as_bigint as 'com.autohome.bdp.udf.ConvertAsBigint';create temporary function to_json as 'com.autohome.bdp.udf.ToJson';select
   count(1)
 from
   (
