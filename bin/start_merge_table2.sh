@@ -1,7 +1,7 @@
 #!/bin/bash
 
 ##################
-# 采用比较严格的校验
+# 采用比较宽松的校验
 ##################
 
 if [[ $# -ne 6 ]];then
@@ -111,45 +111,27 @@ function build_validate_sql()
   local validate_cols=$4
   local full_table_name=$5
   local dt=$6
-  echo -e "set hive.map.aggr=true;set hive.exec.parallel=true;set hive.exec.parallel.thread.number=2;set mapreduce.job.queuename=${queue_name};add jar viewfs://AutoLq2Cluster/user/xuming10797/bdp-udf-2.0-SNAPSHOT.jar;
-create temporary function convert_as_bigint as 'com.autohome.bdp.udf.ConvertAsBigint';create temporary function to_json as 'com.autohome.bdp.udf.ToJson';select
+  echo -e "set hive.map.aggr=true;set hive.exec.parallel=true;set hive.exec.parallel.thread.number=2;set mapreduce.job.queuename=${queue_name};select
   count(1)
 from
   (
     select
-      hash(a.md5_value) % 50000 as hv,
-      sum(convert_as_bigint(a.md5_value)) as md5_value
+      count(1) as md5_value
     from
-      (
-        select
-          ${validate_cols} as md5_value
-        from
-          ${full_table_name}
-        where
-          dt = '${dt}'
-      ) as a
-    group by
-      hash(a.md5_value) % 50000
+      ${full_table_name}
+    where
+      dt = '${dt}'
   ) as c full
   outer join (
     select
-      hash(b.md5_value) % 50000 as hv,
-      sum(convert_as_bigint(b.md5_value)) as md5_value
+      count(1) as md5_value
     from
-      (
-        select
-          ${validate_cols} as md5_value
-        from
-          ${tmp_db_name}.${table_name}
-        where
-          dt = '${dt}'
-      ) as b
-      group by
-        hash(b.md5_value) % 50000
-  ) as d on c.hv = d.hv
+      ${tmp_db_name}.${table_name}
+    where
+      dt = '${dt}'
+  ) as d on c.md5_value = d.md5_value
 where
-  c.md5_value != d.md5_value
-  or c.md5_value is null
+  c.md5_value is null
   or d.md5_value is null;"
 }
 
