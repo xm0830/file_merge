@@ -1,7 +1,7 @@
 set hive.exec.dynamic.partition.mode=nonstrict;
 set hive.exec.dynamic.partition=true;
-set hive.exec.max.dynamic.partitions=1000;
-set hive.exec.max.dynamic.partitions.pernode=1000;
+set hive.exec.max.dynamic.partitions=5000;
+set hive.exec.max.dynamic.partitions.pernode=5000;
 set mapred.max.split.size=512000000;
 set mapred.min.split.size.per.node=256000000;
 set mapred.min.split.size.per.rack=256000000;
